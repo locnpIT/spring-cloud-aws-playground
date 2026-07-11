@@ -1,0 +1,15 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: spring-aws-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      AWS_ENDPOINT_URL: http://host.docker.internal:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_S3_BUCKET_NAME: spring-aws-documents
+    ports:
+      - "8080:8080"
