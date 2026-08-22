@@ -1,4 +1,4 @@
-package com.phuocloc.backend.storage;
+package com.phuocloc.backend.storage.dto;
 
 import java.util.List;
 

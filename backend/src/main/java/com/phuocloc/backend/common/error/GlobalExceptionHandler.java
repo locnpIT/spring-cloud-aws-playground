@@ -1,6 +1,7 @@
 package com.phuocloc.backend.common.error;
 
 import com.phuocloc.backend.common.api.ApiResponse;
+import com.phuocloc.backend.storage.service.S3StorageService.FileNotFoundException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import java.util.LinkedHashMap;
@@ -42,6 +43,12 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(IllegalArgumentException.class)
 	public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException exception) {
 		return ResponseEntity.badRequest()
+				.body(ApiResponse.failure(exception.getMessage()));
+	}
+
+	@ExceptionHandler(FileNotFoundException.class)
+	public ResponseEntity<ApiResponse<Void>> handleFileNotFound(FileNotFoundException exception) {
+		return ResponseEntity.status(HttpStatus.NOT_FOUND)
 				.body(ApiResponse.failure(exception.getMessage()));
 	}
 
