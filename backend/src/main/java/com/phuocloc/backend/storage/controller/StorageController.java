@@ -4,8 +4,9 @@ import com.phuocloc.backend.common.api.ApiResponse;
 import com.phuocloc.backend.storage.dto.CreateBucketRequest;
 import com.phuocloc.backend.storage.dto.CreateBucketResponse;
 import com.phuocloc.backend.storage.dto.FileListResponse;
+import com.phuocloc.backend.storage.dto.PresignUploadRequest;
+import com.phuocloc.backend.storage.dto.PresignedUploadResponse;
 import com.phuocloc.backend.storage.dto.StorageSummaryResponse;
-import com.phuocloc.backend.storage.dto.UploadFileResponse;
 import com.phuocloc.backend.storage.service.S3StorageService;
 import com.phuocloc.backend.storage.service.S3StorageService.DeleteFileResult;
 import java.net.URLEncoder;
@@ -21,10 +22,8 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/storage")
@@ -46,9 +45,12 @@ public class StorageController {
 		return ApiResponse.success("S3 bucket created", storageService.createBucket(request.bucketName()));
 	}
 
-	@PostMapping(value = "/files", consumes = "multipart/form-data")
-	public ApiResponse<UploadFileResponse> uploadFile(@RequestPart("file") MultipartFile file) {
-		return ApiResponse.success("File uploaded to S3", storageService.uploadFile(file));
+	@PostMapping("/files/presign")
+	public ApiResponse<PresignedUploadResponse> presignUpload(@Valid @RequestBody PresignUploadRequest request) {
+		return ApiResponse.success(
+				"Presigned upload URL created",
+				storageService.createPresignedUploadUrl(request.fileName(), request.contentType())
+		);
 	}
 
 	@GetMapping("/files")

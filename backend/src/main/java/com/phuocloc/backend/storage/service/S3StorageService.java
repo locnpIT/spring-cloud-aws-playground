@@ -1,25 +1,24 @@
 package com.phuocloc.backend.storage.service;
 
 import com.phuocloc.backend.config.AwsProperties;
+import com.phuocloc.backend.storage.cors.S3CorsConfigurer;
 import com.phuocloc.backend.storage.dto.BucketResponse;
 import com.phuocloc.backend.storage.dto.FileListResponse;
 import com.phuocloc.backend.storage.dto.CreateBucketResponse;
+import com.phuocloc.backend.storage.dto.PresignedUploadResponse;
 import com.phuocloc.backend.storage.dto.StoredFileResponse;
-import com.phuocloc.backend.storage.dto.UploadFileResponse;
 import com.phuocloc.backend.storage.dto.StorageSummaryResponse;
-import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.List;
-import java.util.Locale;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
-import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.core.ResponseInputStream;
+import org.springframework.stereotype.Service;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.BucketAlreadyExistsException;
 import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
@@ -28,16 +27,23 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 @Service
 public class S3StorageService {
 
 	private final S3Client s3Client;
+	private final S3Presigner s3Presigner;
 	private final AwsProperties awsProperties;
+	private final S3CorsConfigurer corsConfigurer;
 
-	public S3StorageService(S3Client s3Client, AwsProperties awsProperties) {
+	public S3StorageService(S3Client s3Client, S3Presigner s3Presigner, AwsProperties awsProperties, S3CorsConfigurer corsConfigurer) {
 		this.s3Client = s3Client;
+		this.s3Presigner = s3Presigner;
 		this.awsProperties = awsProperties;
+		this.corsConfigurer = corsConfigurer;
 	}
 
 	public StorageSummaryResponse listBuckets() {
@@ -53,53 +59,71 @@ public class S3StorageService {
 			s3Client.createBucket(CreateBucketRequest.builder()
 					.bucket(bucketName)
 					.build());
+			corsConfigurer.configureCors(bucketName);
 			return new CreateBucketResponse(bucketName, true);
 		} catch (BucketAlreadyOwnedByYouException | BucketAlreadyExistsException exception) {
+			corsConfigurer.configureCors(bucketName);
 			return new CreateBucketResponse(bucketName, false);
 		} catch (S3Exception exception) {
 			throw new IllegalStateException("Failed to create bucket: " + exception.awsErrorDetails().errorMessage(), exception);
 		}
 	}
 
-	public UploadFileResponse uploadFile(MultipartFile file) {
-		if (file.isEmpty()) {
-			throw new IllegalArgumentException("File is required");
-		}
-
+	public PresignedUploadResponse createPresignedUploadUrl(String fileName, String contentType) {
 		String bucketName = awsProperties.s3().bucketName();
 		if (bucketName == null || bucketName.isBlank()) {
 			throw new IllegalStateException("Configured bucket name is required");
 		}
+		ensureBucketWithCors(bucketName);
 
-		String originalFileName = file.getOriginalFilename();
-		String safeFileName = originalFileName == null || originalFileName.isBlank()
-				? "file"
-				: originalFileName.replaceAll("\\s+", "-").toLowerCase(Locale.ROOT);
+		if (fileName == null || fileName.isBlank()) {
+			throw new IllegalArgumentException("File name is required");
+		}
+
+		String safeFileName = fileName.replaceAll("\\s+", "-");
 		String objectKey = Instant.now().toEpochMilli() + "-" + safeFileName;
 
+		PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+				.bucket(bucketName)
+				.key(objectKey)
+				.contentType(contentType)
+				.build();
+
+		PresignedPutObjectRequest presignedRequest = s3Presigner.presignPutObject(
+				PutObjectPresignRequest.builder()
+						.signatureDuration(Duration.ofMinutes(10))
+						.putObjectRequest(putObjectRequest)
+						.build()
+		);
+
+		return new PresignedUploadResponse(
+				bucketName,
+				objectKey,
+				presignedRequest.url().toString(),
+				Instant.now().plus(Duration.ofMinutes(10))
+		);
+	}
+
+	public void ensureBucketExists(String bucketName) {
 		try {
-			s3Client.putObject(
-					PutObjectRequest.builder()
-							.bucket(bucketName)
-							.key(objectKey)
-							.contentType(file.getContentType())
-							.contentLength(file.getSize())
-							.build(),
-					RequestBody.fromInputStream(file.getInputStream(), file.getSize())
-			);
-			return new UploadFileResponse(bucketName, objectKey, file.getOriginalFilename(), file.getSize(), file.getContentType());
-		} catch (IOException exception) {
-			throw new IllegalStateException("Failed to read file content", exception);
+			s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build());
 		} catch (S3Exception exception) {
-			throw new IllegalStateException("Failed to upload file: " + exception.awsErrorDetails().errorMessage(), exception);
+			throw new IllegalStateException("Configured bucket does not exist: " + bucketName, exception);
 		}
 	}
+
+	private void ensureBucketWithCors(String bucketName) {
+		ensureBucketExists(bucketName);
+		corsConfigurer.configureCors(bucketName);
+	}
+
 
 	public FileListResponse listFiles() {
 		String bucketName = awsProperties.s3().bucketName();
 		if (bucketName == null || bucketName.isBlank()) {
 			throw new IllegalStateException("Configured bucket name is required");
 		}
+		ensureBucketWithCors(bucketName);
 
 		List<StoredFileResponse> files = s3Client.listObjectsV2(ListObjectsV2Request.builder()
 						.bucket(bucketName)
@@ -117,6 +141,7 @@ public class S3StorageService {
 		if (bucketName == null || bucketName.isBlank()) {
 			throw new IllegalStateException("Configured bucket name is required");
 		}
+		ensureBucketWithCors(bucketName);
 
 		try {
 			ResponseInputStream<GetObjectResponse> response = s3Client.getObject(GetObjectRequest.builder()
@@ -142,6 +167,7 @@ public class S3StorageService {
 		if (bucketName == null || bucketName.isBlank()) {
 			throw new IllegalStateException("Configured bucket name is required");
 		}
+		ensureBucketWithCors(bucketName);
 
 		try {
 			s3Client.deleteObject(DeleteObjectRequest.builder()
